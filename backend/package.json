@@ -1,0 +1,26 @@
+{
+  "name": "taskflow-backend",
+  "version": "1.0.0",
+  "description": "TaskFlow API — Projet DevOps B3",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node server.test.js",
+    "lint": "npx eslint server.js server.test.js"
+  },
+  "eslintConfig": {
+    "env": { "node": true, "es2021": true },
+    "rules": {
+      "no-unused-vars": "error",
+      "semi": ["error", "always"],
+      "quotes": ["error", "double"]
+    }
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "redis": "^4.6.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  }
+}

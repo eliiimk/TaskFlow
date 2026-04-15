@@ -1,0 +1,191 @@
+const http = require("http");
+const redis = require("redis");
+const crypto = require("crypto");
+
+// Chargement du fichier .env si présent
+try { require("dotenv").config(); } catch { /* dotenv optionnel */ }
+
+const PORT = process.env.PORT || 3001;
+const APP_ENV = process.env.APP_ENV || "development";
+const APP_VERSION = process.env.APP_VERSION || "1.0.0";
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
+
+const client = redis.createClient({ url: REDIS_URL });
+client.on("error", (err) => console.error("Redis error:", err));
+
+function genId() {
+  return crypto.randomBytes(6).toString("hex");
+}
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try { resolve(body ? JSON.parse(body) : {}); }
+      catch { reject(new Error("JSON invalide")); }
+    });
+  });
+}
+
+function json(res, status, data) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "X-App-Version": APP_VERSION,
+    "X-App-Env": APP_ENV
+  });
+  res.end(JSON.stringify(data));
+}
+
+// ── TÂCHES ───────────────────────────────────────────────────────────
+
+async function getTasks() {
+  const keys = await client.keys("task:*");
+  if (!keys.length) return [];
+  const tasks = await Promise.all(
+    keys.map(async (k) => {
+      const t = await client.hGetAll(k);
+      return {
+        id: k.replace("task:", ""),
+        title: t.title,
+        description: t.description || "",
+        status: t.status || "todo",
+        priority: t.priority || "medium",
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt || t.createdAt
+      };
+    })
+  );
+  return tasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+async function getTask(id) {
+  const t = await client.hGetAll(`task:${id}`);
+  if (!t.title) return null;
+  return { id, ...t };
+}
+
+async function createTask({ title, description, priority }) {
+  if (!title?.trim()) throw new Error("Le titre est requis");
+  const id = genId();
+  const now = new Date().toISOString();
+  await client.hSet(`task:${id}`, {
+    title: title.trim(),
+    description: description?.trim() || "",
+    status: "todo",
+    priority: priority || "medium",
+    createdAt: now,
+    updatedAt: now
+  });
+  await client.incr("stats:total_created");
+  return { id, title, description, status: "todo", priority, createdAt: now };
+}
+
+async function updateTask(id, { title, description, status, priority }) {
+  const exists = await client.exists(`task:${id}`);
+  if (!exists) return null;
+  const now = new Date().toISOString();
+  const updates = { updatedAt: now };
+  if (title !== undefined) updates.title = title.trim();
+  if (description !== undefined) updates.description = description.trim();
+  if (status !== undefined) {
+    updates.status = status;
+    if (status === "done") await client.incr("stats:total_completed");
+  }
+  if (priority !== undefined) updates.priority = priority;
+  await client.hSet(`task:${id}`, updates);
+  return getTask(id);
+}
+
+async function deleteTask(id) {
+  const deleted = await client.del(`task:${id}`);
+  return deleted > 0;
+}
+
+// ── SERVEUR ──────────────────────────────────────────────────────────
+
+const server = http.createServer(async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type"
+    });
+    res.end();
+    return;
+  }
+
+  const url = req.url.split("?")[0];
+
+  // GET /health
+  if (req.method === "GET" && url === "/health") {
+    const totalCreated = await client.get("stats:total_created").catch(() => "0");
+    const totalCompleted = await client.get("stats:total_completed").catch(() => "0");
+    json(res, 200, {
+      status: "ok",
+      env: APP_ENV,
+      version: APP_VERSION,
+      redis: "connected",
+      stats: {
+        totalCreated: parseInt(totalCreated) || 0,
+        totalCompleted: parseInt(totalCompleted) || 0
+      }
+    });
+    return;
+  }
+
+  // GET /tasks
+  if (req.method === "GET" && url === "/tasks") {
+    const tasks = await getTasks();
+    json(res, 200, { total: tasks.length, tasks });
+    return;
+  }
+
+  // POST /tasks
+  if (req.method === "POST" && url === "/tasks") {
+    try {
+      const body = await parseBody(req);
+      const task = await createTask(body);
+      json(res, 201, task);
+    } catch (e) { json(res, 400, { error: e.message }); }
+    return;
+  }
+
+  // PUT /tasks/:id
+  const matchPut = url.match(/^\/tasks\/([a-f0-9]{12})$/);
+  if (req.method === "PUT" && matchPut) {
+    try {
+      const body = await parseBody(req);
+      const task = await updateTask(matchPut[1], body);
+      if (!task) { json(res, 404, { error: "Tâche introuvable" }); return; }
+      json(res, 200, task);
+    } catch (e) { json(res, 400, { error: e.message }); }
+    return;
+  }
+
+  // DELETE /tasks/:id
+  const matchDel = url.match(/^\/tasks\/([a-f0-9]{12})$/);
+  if (req.method === "DELETE" && matchDel) {
+    const deleted = await deleteTask(matchDel[1]);
+    if (!deleted) { json(res, 404, { error: "Tâche introuvable" }); return; }
+    json(res, 200, { message: "Tâche supprimée" });
+    return;
+  }
+
+  json(res, 404, { error: "Route introuvable" });
+});
+
+client.connect().then(() => {
+  console.log(`Redis connecté sur ${REDIS_URL}`);
+  server.listen(PORT, () => {
+    console.log(`TaskFlow API — env: ${APP_ENV}, version: ${APP_VERSION}, port: ${PORT}`);
+  });
+}).catch((err) => {
+  console.error("Impossible de démarrer:", err.message);
+  process.exit(1);
+});
+
+module.exports = { server, genId, createTask, updateTask, deleteTask };
