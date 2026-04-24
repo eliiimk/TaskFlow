@@ -21,7 +21,7 @@ spec:
       containers:
       - name: backend
         image: eliiimk/taskflow-backend:latest
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 3001
         envFrom:
