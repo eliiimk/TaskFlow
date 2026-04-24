@@ -153,7 +153,17 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /tasks
+  // GET /stats
+  if (req.method === "GET" && url === "/stats") {
+    const tasks = await getTasks();
+    const byStatus = { todo: 0, "in-progress": 0, done: 0 };
+    tasks.forEach(t => { if (byStatus[t.status] !== undefined) byStatus[t.status]++; });
+    const total = tasks.length;
+    const completionRate = total === 0 ? 0 : Math.round((byStatus.done / total) * 100);
+    json(res, 200, { total, byStatus, completionRate });
+    return;
+  }
+
   if (req.method === "POST" && url === "/tasks") {
     try {
       const body = await parseBody(req);
