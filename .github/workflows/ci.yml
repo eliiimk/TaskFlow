@@ -5,12 +5,11 @@ on:
     branches:
       - main
       - staging
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
-  push:
-    tags:
-      - 'v*'
 
 jobs:
   test:
