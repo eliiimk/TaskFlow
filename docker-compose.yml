@@ -1,0 +1,48 @@
+services:
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "80:80"
+    networks:
+      - taskflow-net
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=${PORT:-3001}
+      - APP_ENV=${APP_ENV:-development}
+      - APP_VERSION=${APP_VERSION:-1.0.0}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+    networks:
+      - taskflow-net
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    networks:
+      - taskflow-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis_data:
+
+networks:
+  taskflow-net:
+    driver: bridge

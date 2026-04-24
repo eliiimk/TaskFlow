@@ -1,0 +1,234 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+  pull_request:
+    branches:
+      - main
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+          
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+        
+      - name: Run tests
+        working-directory: backend
+        run: npm test
+
+  lint:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+          
+      - name: Install dependencies
+        working-directory: backend
+        run: npm ci
+        
+      - name: Run linter
+        working-directory: backend
+        run: npm run lint
+
+  audit:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Run npm audit
+        working-directory: backend
+        run: |
+          npm audit --audit-level=high > audit-report.txt || true
+          if grep -q "found [0-9]* vulnerabilities (.*high.*\|.*critical.*)" audit-report.txt; then
+            echo "High or Critical vulnerabilities found"
+            exit 1
+          fi
+          # Actually npm audit --audit-level=high fails with exit code 1 if vulnerabilities are found
+          npm audit --audit-level=high
+          
+      - name: Upload audit report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: backend/audit-report.txt
+
+  build:
+    needs: [test, lint, audit]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend
+            ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend
+            
+      - name: Build local image for Trivy scanning (Backend)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          load: true
+          tags: local/taskflow-backend:test
+          
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'local/taskflow-backend:test'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+          output: 'trivy-report.txt'
+          
+      - name: Upload Trivy Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+          
+      - name: Check Backend Image Size
+        run: |
+          SIZE=$(docker images local/taskflow-backend:test --format "{{.Size}}" | sed 's/MB//')
+          if (( $(echo "$SIZE > 200.0" |bc -l) )); then
+            echo "Image size ($SIZE MB) exceeds 200MB limit!"
+            exit 1
+          else
+            echo "Image size ($SIZE MB) is within limits."
+          fi
+
+      - name: Build and push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-backend:${{ github.ref_name }}
+          
+      - name: Build and push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/taskflow-frontend:${{ github.ref_name }}
+
+  deploy-staging:
+    needs: build
+    if: github.ref == 'refs/heads/staging' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_STAGING }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          
+      - name: Deploy to Staging
+        run: |
+          kubectl apply -f k8s/staging/
+          
+  smoke-test:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_STAGING }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          
+      - name: Wait for Pods to be Ready
+        run: |
+          kubectl rollout status deployment/backend -n staging --timeout=120s
+          kubectl rollout status deployment/frontend -n staging --timeout=120s
+          
+      - name: Test /health endpoint
+        run: |
+          kubectl port-forward svc/backend 3001:3001 -n staging &
+          sleep 5
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/health)
+          if [ "$RESPONSE" -ne 200 ]; then
+            echo "Smoke test failed. HTTP Code: $RESPONSE"
+            exit 1
+          fi
+          echo "Smoke test passed. HTTP Code: 200"
+
+  deploy-production:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBECONFIG_PRODUCTION }}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          
+      - name: Deploy to Production
+        run: |
+          kubectl apply -f k8s/production/

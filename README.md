@@ -1,5 +1,7 @@
 # TaskFlow
 
+[![CI/CD Pipeline](https://github.com/eliiimk/taskflow/actions/workflows/ci.yml/badge.svg)](https://github.com/eliiimk/taskflow/actions/workflows/ci.yml)
+
 Application web de gestion de tâches. Interface Kanban avec backend Node.js et persistance Redis.
 
 ## Stack technique
@@ -15,63 +17,39 @@ Application web de gestion de tâches. Interface Kanban avec backend Node.js et 
 ```
 taskflow/
 ├── frontend/
-│   └── index.html          ← interface Kanban
+│   ├── index.html          ← interface Kanban
+│   └── Dockerfile          ← Image frontend Nginx
 ├── backend/
 │   ├── server.js           ← API REST
 │   ├── server.test.js      ← tests unitaires
-│   └── package.json
+│   ├── package.json
+│   └── Dockerfile          ← Image backend Node
+├── k8s/                    ← Manifests Kubernetes
 ├── .env.example
-├── .gitignore
+├── docker-compose.yml
+├── .dockerignore
 └── README.md
 ```
 
-## Lancer le projet en local
+## Lancer le projet en local (Production-Ready)
 
-### Prérequis
-
-- Node.js 18+
-- Docker Desktop démarré (pour lancer Redis)
-
-### Lancer Redis
-
-Redis tourne dans un container Docker — pas besoin de l'installer sur ta machine.
+Plus besoin d'installer Node.js ou de configurer Redis manuellement. L'application complète (frontend, backend, Redis) démarre avec une seule commande :
 
 ```bash
-docker run -d -p 6379:6379 --name redis-dev redis:7-alpine
-```
-
-Pour vérifier que Redis tourne :
-
-```bash
-docker ps
-# → redis-dev doit être listé en "Up"
-```
-
-Pour arrêter Redis :
-
-```bash
-docker stop redis-dev && docker rm redis-dev
-```
-
-### 1. Cloner le projet
-
-```bash
-git clone https://github.com/[FORMATEUR]/taskflow.git
-cd taskflow
-```
-
-### 2. Créer le fichier de configuration
-
-```bash
+# Copier le fichier d'environnement (si ce n'est pas fait)
 cp .env.example .env
+
+# Démarrer les 3 services
+docker compose up --build -d
 ```
 
-### 3. Installer les dépendances et lancer le backend
+L'interface sera accessible sur : http://localhost
+L'API répondra sur : http://localhost:3001
+Redis tourne en arrière-plan sur son propre réseau interne.
 
+Pour arrêter les services :
 ```bash
-cd backend
-npm install
-npm start
+docker compose down
 ```
 
 ### 4. Vérifier que l'API répond
