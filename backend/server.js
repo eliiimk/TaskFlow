@@ -1,13 +1,13 @@
-const http   = require("http");
-const redis  = require("redis");
+const http = require("http");
+const redis = require("redis");
 const crypto = require("crypto");
 
 try { require("dotenv").config(); } catch { /* dotenv optionnel */ }
 
-const PORT        = process.env.PORT        || 3001;
-const APP_ENV     = process.env.APP_ENV     || "development";
+const PORT = process.env.PORT || 3001;
+const APP_ENV = process.env.APP_ENV || "development";
 const APP_VERSION = process.env.APP_VERSION || "1.0.0";
-const REDIS_URL   = process.env.REDIS_URL   || "redis://127.0.0.1:6379";
+const REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:6379";
 
 const client = redis.createClient({ url: REDIS_URL });
 client.on("error", (err) => console.error("Redis error:", err.message));
@@ -31,17 +31,17 @@ function parseBody(req) {
 
 function json(res, status, data) {
   res.writeHead(status, {
-    "Content-Type":                "application/json; charset=utf-8",
+    "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods":"GET, POST, PUT, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers":"Content-Type",
-    "X-App-Version":               APP_VERSION,
-    "X-App-Env":                   APP_ENV,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "X-App-Version": APP_VERSION,
+    "X-App-Env": APP_ENV,
   });
   res.end(JSON.stringify(data));
 }
 
-const VALID_STATUSES   = ["todo", "in-progress", "done"];
+const VALID_STATUSES = ["todo", "in-progress", "done"];
 const VALID_PRIORITIES = ["low", "medium", "high"];
 
 // ── Logique tâches ───────────────────────────────────────────────────
@@ -53,13 +53,13 @@ async function getTasks() {
     keys.map(async (k) => {
       const t = await client.hGetAll(k);
       return {
-        id:          k.replace("task:", ""),
-        title:       t.title,
+        id: k.replace("task:", ""),
+        title: t.title,
         description: t.description || "",
-        status:      t.status      || "todo",
-        priority:    t.priority    || "medium",
-        createdAt:   t.createdAt,
-        updatedAt:   t.updatedAt   || t.createdAt,
+        status: t.status || "todo",
+        priority: t.priority || "medium",
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt || t.createdAt,
       };
     })
   );
@@ -77,15 +77,15 @@ async function createTask({ title, description, priority }) {
   if (priority && !VALID_PRIORITIES.includes(priority)) {
     throw new Error("Priorité invalide : low, medium ou high");
   }
-  const id  = genId();
+  const id = genId();
   const now = new Date().toISOString();
   await client.hSet(`task:${id}`, {
-    title:       title.trim(),
+    title: title.trim(),
     description: description?.trim() || "",
-    status:      "todo",
-    priority:    priority || "medium",
-    createdAt:   now,
-    updatedAt:   now,
+    status: "todo",
+    priority: priority || "medium",
+    createdAt: now,
+    updatedAt: now,
   });
   await client.incr("stats:total_created");
   return { id, title: title.trim(), description: description?.trim() || "", status: "todo", priority: priority || "medium", createdAt: now };
@@ -94,13 +94,13 @@ async function createTask({ title, description, priority }) {
 async function updateTask(id, { title, description, status, priority }) {
   const exists = await client.exists(`task:${id}`);
   if (!exists) return null;
-  if (status   && !VALID_STATUSES.includes(status))   throw new Error("Statut invalide : todo, in-progress ou done");
+  if (status && !VALID_STATUSES.includes(status)) throw new Error("Statut invalide : todo, in-progress ou done");
   if (priority && !VALID_PRIORITIES.includes(priority)) throw new Error("Priorité invalide : low, medium ou high");
-  const now     = new Date().toISOString();
+  const now = new Date().toISOString();
   const updates = { updatedAt: now };
-  if (title       !== undefined) updates.title       = title.trim();
+  if (title !== undefined) updates.title = title.trim();
   if (description !== undefined) updates.description = description.trim();
-  if (status      !== undefined) {
+  if (status !== undefined) {
     updates.status = status;
     if (status === "done") await client.incr("stats:total_completed");
   }
@@ -119,7 +119,7 @@ async function deleteTask(id) {
 const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin":  "*",
+      "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     });
@@ -131,15 +131,15 @@ const server = http.createServer(async (req, res) => {
 
   // GET /health
   if (req.method === "GET" && url === "/health") {
-    const totalCreated   = await client.get("stats:total_created").catch(() => "0");
+    const totalCreated = await client.get("stats:total_created").catch(() => "0");
     const totalCompleted = await client.get("stats:total_completed").catch(() => "0");
     json(res, 200, {
-      status:  "ok",
-      env:     APP_ENV,
+      status: "ok",
+      env: APP_ENV,
       version: APP_VERSION,
-      redis:   "connected",
+      redis: "connected",
       stats: {
-        totalCreated:   parseInt(totalCreated   || "0"),
+        totalCreated: parseInt(totalCreated || "0"),
         totalCompleted: parseInt(totalCompleted || "0"),
       },
     });
