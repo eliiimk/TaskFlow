@@ -75,3 +75,124 @@ L'Ingress Controller nginx de Minikube a été activé (`minikube addons enable 
 - `/api → Service backend (port 3001)` : route les appels API vers le serveur Node.js
 
 **Justification :** L'Ingress remplace avantageusement le `NodePort` ou le `kubectl port-forward` utilisés en développement. En production, c'est le standard pour exposer plusieurs services derrière une seule adresse IP, avec la possibilité d'ajouter du TLS/HTTPS, du rate-limiting ou de l'authentification au niveau de l'Ingress Controller sans toucher au code applicatif.
+
+---
+
+## 5. Guide de Démarrage Rapide
+
+Ce guide récapitule toutes les commandes nécessaires pour faire tourner le projet de bout en bout.
+
+### ▶️ Étape 1 — Lancer l'application en local (Docker)
+
+```bash
+# Cloner le dépôt
+git clone https://github.com/eliiimk/TaskFlow.git
+cd TaskFlow
+
+# Copier le fichier d'environnement
+cp .env.example .env
+
+# Construire et démarrer les 3 services (frontend, backend, Redis)
+docker compose up --build -d
+
+# Vérifier que tout tourne
+docker compose ps
+
+# Accéder à l'application
+# → Interface web : http://localhost
+# → API backend   : http://localhost:3001/health
+# → Statistiques  : http://localhost:3001/stats
+```
+
+Pour arrêter :
+```bash
+docker compose down
+```
+
+---
+
+### ▶️ Étape 2 — Déployer sur Kubernetes (Minikube)
+
+```bash
+# Démarrer le cluster local
+minikube start --driver=docker
+
+# Activer les addons nécessaires
+minikube addons enable ingress
+minikube addons enable metrics-server
+
+# Créer les namespaces
+kubectl create namespace staging
+kubectl create namespace production
+
+# Charger les images locales dans Minikube
+minikube image load eliiimk/taskflow-backend:latest
+minikube image load eliiimk/taskflow-frontend:latest
+
+# Déployer sur staging
+kubectl apply -f k8s/staging/
+
+# Déployer sur production
+kubectl apply -f k8s/production/
+
+# Vérifier que les pods sont Running
+kubectl get pods -n staging
+kubectl get pods -n production
+```
+
+---
+
+### ▶️ Étape 3 — Accéder à l'application via l'Ingress
+
+```bash
+# Dans un terminal dédié (laisser tourner)
+minikube tunnel
+
+# Ajouter le domaine local (une seule fois)
+sudo sh -c 'echo "127.0.0.1 taskflow.local" >> /etc/hosts'
+
+# Tester l'accès via l'Ingress
+curl -H "Host: taskflow.local" http://127.0.0.1          # Frontend
+curl -H "Host: taskflow.local" http://127.0.0.1/api/health  # API
+```
+
+Ou ouvrir directement dans le navigateur : **http://taskflow.local**
+
+---
+
+### ▶️ Étape 4 — Démos Kubernetes (à l'oral)
+
+```bash
+# Surveiller les pods en temps réel (Terminal 1)
+kubectl get pods -n production -w
+
+# Self-healing : tuer un pod et voir K8s le recréer (Terminal 2)
+kubectl delete pod -l app=backend -n production --wait=false
+
+# Rolling Update : déployer une nouvelle version sans coupure
+kubectl set image deployment/backend backend=eliiimk/taskflow-backend:v1.0.1 -n production
+kubectl rollout status deployment/backend -n production
+
+# Rollback : revenir à la version précédente en une commande
+kubectl rollout undo deployment/backend -n production
+
+# Monitoring : voir la consommation CPU/RAM des pods (Bonus C)
+kubectl top pods -n production
+```
+
+---
+
+### ▶️ Tester les Bonus
+
+```bash
+# Bonus A — Vérifier la route /stats
+curl http://localhost:3001/stats
+# → {"total":X,"byStatus":{"todo":X,"in-progress":X,"done":X},"completionRate":X}
+
+# Bonus C — Afficher les métriques CPU/RAM des pods
+kubectl top pods -n production
+
+# Bonus D — Tester l'Ingress (avec minikube tunnel actif)
+curl -H "Host: taskflow.local" http://127.0.0.1/api/health
+# → {"status":"ok","redis":"connected",...}
+```
